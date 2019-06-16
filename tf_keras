@@ -1,0 +1,86 @@
+
+from keras.preprocessing.text import Tokenizer
+from keras.preprocessing.sequence import pad_sequences
+
+import os
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+from tqdm import tqdm
+import math
+from sklearn.model_selection import train_test_split
+
+SEQ_LEN = 28
+
+train_df = pd.read_csv("/home/mark/Downloads/quora/train/train.csv")
+train_df, val_df = train_test_split(train_df, test_size=0.1)
+
+
+train_df.question_text.str.split().str.len().describe()
+
+embeddings_index = {}
+f = open('/home/mark/Downloads/quora/embeddings/glove.840B.300d/glove.840B.300d.txt')
+for line in tqdm(f):
+    values = line.split(" ")
+    word = values[0]
+    coefs = np.asarray(values[1:], dtype='float32')
+    embeddings_index[word] = coefs
+f.close()
+
+print('Found %s word vectors.' % len(embeddings_index))
+
+
+
+# Convert values to embeddings
+def text_to_array(text):
+    empyt_emb = np.zeros(300)
+    text = text[:-1].split()[:SEQ_LEN]
+    embeds = [embeddings_index.get(x, empyt_emb) for x in text]
+    embeds+= [empyt_emb] * (SEQ_LEN - len(embeds))
+    return np.array(embeds)
+
+# train_vects = [text_to_array(X_text) for X_text in tqdm(train_df["question_text"])]
+val_vects = np.array([text_to_array(X_text) for X_text in tqdm(val_df["question_text"][:3000])])
+val_y = np.array(val_df["target"][:3000])
+
+
+
+# Data providers
+batch_size = 256 # increase batch size to 256 | original 128
+
+def batch_gen(train_df):
+    n_batches = math.ceil(len(train_df) / batch_size)
+    while True: 
+        train_df = train_df.sample(frac=1.)  # Shuffle the data.
+        for i in range(n_batches):
+            texts = train_df.iloc[i*batch_size:(i+1)*batch_size, 1]
+            text_arr = np.array([text_to_array(text) for text in texts])
+            yield text_arr, np.array(train_df["target"][i*batch_size:(i+1)*batch_size])
+            
+            
+
+from keras.models import Sequential
+from keras.layers import *
+
+
+model = Sequential()
+model.add(Bidirectional(LSTM(128, return_sequences=True),input_shape=(SEQ_LEN, 300)))
+model.add(Dropout(.5))
+model.add(Bidirectional(LSTM(128, return_sequences=True),input_shape=(SEQ_LEN, 300)))
+model.add(Dropout(.4))
+model.add(Bidirectional(LSTM(64)))
+model.add(Dropout(.3))
+model.add(Dense(1, activation="relu")) # try relu vs sigmoid
+
+model.compile(loss='binary_crossentropy',optimizer='adam',metrics=['accuracy'])
+
+mg = batch_gen(train_df)
+model.fit_generator(mg, epochs=5, #epochs original 25
+                    steps_per_epoch=500, #1000 to 2000
+                    validation_data=(val_vects, val_y),
+                    verbose=True)
+
+
+
+print(model.summary())
+model.metrics
+model.metrics_tensors
